@@ -6,10 +6,14 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 import mcp.server.stdio
 import os
+import base64
+from pathlib import Path
+import datetime
 
 TOGETHER_AI_BASE = "https://api.together.xyz/v1/images/generations"
 API_KEY = os.getenv("TOGETHER_AI_API_KEY")
-DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
+# DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
+DEFAULT_MODEL = "black-forest-labs/FLUX.2-dev"
 
 server = Server("image-gen")
 
@@ -42,6 +46,14 @@ async def handle_list_tools() -> list[types.Tool]:
                     "height": {
                         "type": "number",
                         "description": "Optional height for the image",
+                    },
+                    "save_to_disk": {
+                        "type": "boolean",
+                        "description": "Whether to save the generated image to disk (default: false)",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Path where the image should be saved (optional, defaults to current directory with auto-generated filename)",
                     },
                 },
                 "required": ["prompt", "model"],
@@ -119,6 +131,8 @@ async def handle_call_tool(
         model = arguments.get("model")
         width = arguments.get("width")
         height = arguments.get("height")
+        save_to_disk = arguments.get("save_to_disk", False)
+        output_path = arguments.get("output_path")
 
         if not prompt or not model:
             return [
@@ -139,11 +153,53 @@ async def handle_call_tool(
 
             try:
                 b64_image = response_data["data"][0]["b64_json"]
-                return [
-                    types.ImageContent(
-                        type="image", data=b64_image, mimeType="image/jpeg"
-                    )
-                ]
+
+                # Handle saving to disk if requested
+                if save_to_disk:
+                    try:
+                        # Decode the base64 image
+                        image_data = base64.b64decode(b64_image)
+
+                        # Determine the output path
+                        if output_path:
+                            save_path = Path(output_path)
+                        else:
+                            # Generate a default filename based on timestamp
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            save_path = Path(f"generated_image_{timestamp}.png")
+
+                        # Ensure parent directory exists
+                        save_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        # Write the image to disk
+                        with open(save_path, "wb") as f:
+                            f.write(image_data)
+
+                        # Return both the image and success message
+                        return [
+                            types.ImageContent(
+                                type="image", data=b64_image, mimeType="image/png"
+                            ),
+                            types.TextContent(
+                                type="text", text=f"Image saved to: {save_path.absolute()}"
+                            )
+                        ]
+                    except Exception as e:
+                        return [
+                            types.ImageContent(
+                                type="image", data=b64_image, mimeType="image/png"
+                            ),
+                            types.TextContent(
+                                type="text", text=f"Warning: Failed to save image to disk: {e}"
+                            )
+                        ]
+                else:
+                    # Return just the image content
+                    return [
+                        types.ImageContent(
+                            type="image", data=b64_image, mimeType="image/png"
+                        )
+                    ]
             except (KeyError, IndexError) as e:
                 return [
                     types.TextContent(
